@@ -1,0 +1,72 @@
+name: CI/CD
+
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, cache: true }
+
+      # المستودع ما فيه مجلدات web/android، فنولّدها هنا على السيرفر
+      - name: Generate platform folders
+        run: |
+          flutter create --org com.madhkarati --project-name madhkarati --platforms=web,android .
+          git checkout -- lib pubspec.yaml   # نتأكد إن كودك ما انكتب فوقه
+          rm -rf test                        # اختبار flutter create الافتراضي يشير إلى MyApp وما يشتغل مع مشروعك
+
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: build/web }
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, cache: true }
+
+      - name: Generate platform folders
+        run: |
+          flutter create --org com.madhkarati --project-name madhkarati --platforms=web,android .
+          git checkout -- lib pubspec.yaml
+          rm -rf test
+
+      # google_fonts يحمّل الخطوط من الإنترنت، ونسخة release تحتاج صلاحية INTERNET
+      - name: Android manifest tweaks
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$M"
+          sed -i 's#android:label="madhkarati"#android:label="مذاكرتي"#' "$M"
+
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
